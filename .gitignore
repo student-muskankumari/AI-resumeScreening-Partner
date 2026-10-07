@@ -1,0 +1,27 @@
+# --- Secrets: never commit API keys -----------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- Local environment, caches, scratch -------------------------------------
+.venv/
+venv/
+.cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+_analysis_tmp/
+test_resumes/
+output/test*.json
+
+# --- Duplicate copy of the dataset and the assignment brief ------------------
+resume_dataset_50 (1)/
+*.docx
+
+# --- Personal data ------------------------------------------------------------
+# The resumes and results.json contain real people's names, emails and phone
+# numbers. They stay out of Git while the repository is PUBLIC.
+# After making the repository PRIVATE, delete the two lines below to include
+# them (results.json is a required deliverable).
+resumes/
+output/
