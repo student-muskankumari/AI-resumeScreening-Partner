@@ -70,7 +70,7 @@ def test_unverifiable_quotes_earn_nothing(settings):
     assert outcome.evidence.ai.evaluation.strength == 0          # invented quote
     assert outcome.evidence.backend.redis.level == "absent"      # positive signal with no quote
     assert outcome.evidence.backend.python.level == "used"       # real quote kept
-    assert any("dropped" in w for w in outcome.warnings)
+    assert any("2 signal(s) dropped by the quote check" in w for w in outcome.warnings)
 
 
 def test_invalid_json_is_retried_once_then_succeeds(settings):
@@ -154,10 +154,54 @@ def test_parse_model_json_variants():
 def test_verify_evidence_accepts_small_edits_but_not_inventions():
     evidence = Evidence.model_validate({"ai": {"kind": "genai", "retrieval": {
         "strength": 2, "evidence": "Implemented a RAG pipeline with embeddings in pgvector, hybrid search"}}})
-    assert verify_evidence(evidence, STRONG_AGENTIC) == 0
+    assert verify_evidence(evidence, STRONG_AGENTIC) == []
     evidence = Evidence.model_validate({"ai": {"kind": "genai", "agents_tools": {
         "strength": 2, "evidence": "Designed autonomous swarm planners using reinforcement learning"}}})
-    assert verify_evidence(evidence, STRONG_AGENTIC) == 1 and evidence.ai.agents_tools.strength == 0
+    dropped = verify_evidence(evidence, STRONG_AGENTIC)
+    assert len(dropped) == 1 and dropped[0].startswith("ai.agents_tools (quote not in resume")
+    assert evidence.ai.agents_tools.strength == 0
+
+
+def test_quote_check_accepts_words_hyphenated_across_lines():
+    resume = "Experience\nDeveloped real-time intent detection engine with dynamic content per-\nsonalization and multi-\nlanguage voice chat for the Plat-\nform team."
+    evidence = Evidence.model_validate({"ai": {"kind": "genai", "use_case": {
+        "strength": 2, "evidence": "intent detection engine with dynamic content personalization and multi-language voice chat"}}})
+    assert verify_evidence(evidence, resume) == []
+    assert evidence.ai.use_case.strength == 2
+
+
+def test_cache_keeps_the_raw_answer_and_rechecks_quotes_on_load(settings):
+    cache = DiskCache(settings.cache_dir)
+    analyze(settings, [FakeProvider("groq", [json.dumps(GOOD)])], cache)
+    stored = next((settings.cache_dir / "llm").glob("*.json")).read_text(encoding="utf-8")
+    assert "invented" in stored                                  # raw answer, before the quote check
+    _, outcome = analyze(settings, [FakeProvider("groq", [])], cache)
+    assert outcome.from_cache and outcome.evidence.ai.evaluation.strength == 0
+    assert any("ai.evaluation (quote not in resume" in w for w in outcome.warnings)
+    assert any("backend.redis (no quote given)" in w for w in outcome.warnings)
+
+
+def test_model_evidence_cannot_contradict_the_filter(settings):
+    from screener.analysis import reconcile_with_filter
+    from screener.eligibility import evaluate
+    eligibility = evaluate(LINES, settings)
+    evidence = Evidence.model_validate({"ai": {"kind": "none"}, "backend": {"python": {"level": "listed", "evidence": "Languages: Python"}}})
+    notes = reconcile_with_filter(evidence, eligibility)
+    assert evidence.backend.python.level == "used" and evidence.ai.kind == "genai"
+    assert evidence.ai.use_case.strength == 1 and evidence.ai.use_case.evidence
+    assert len(notes) == 3
+
+
+@pytest.mark.parametrize("severity, strong, kept", [(1, 1, True), (1, 2, False), (2, 2, True), (2, 3, False), (3, 3, False)])
+def test_thin_wrapper_flag_is_ignored_when_depth_signals_contradict_it(settings, severity, strong, kept):
+    from screener.analysis import reconcile_with_filter
+    from screener.eligibility import evaluate
+    rules = ["retrieval", "agents_tools", "state_orchestration"][:strong]
+    ai = {"kind": "genai", "use_case": {"strength": 2, "evidence": "x"}, "wrapper_severity": severity,
+          "wrapper_reason": "uses a framework", **{r: {"strength": 2, "evidence": "x"} for r in rules}}
+    evidence = Evidence.model_validate({"ai": ai, "backend": {"python": {"level": "used", "evidence": "x"}}})
+    reconcile_with_filter(evidence, evaluate(LINES, settings))
+    assert (evidence.ai.wrapper_severity == severity) is kept
 
 
 def test_rate_limiter_waits_when_the_minute_budget_is_used():

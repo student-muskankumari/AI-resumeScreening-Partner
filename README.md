@@ -11,19 +11,107 @@ resumes/ ─► parse ─► extract ─► HARD FILTER ─► evidence ─► G
                      GitHub)                     rules)
 ```
 
-## Quick start
+## Setup
 
-Python 3.10 or newer.
+Requires Python 3.10 or newer and Git.
+
+### 1. Get the code and install
 
 ```bash
+git clone https://github.com/student-muskankumari/AI-resumeScreening-Partner.git
+cd AI-resumeScreening-Partner
+
 python -m venv .venv
-source .venv/bin/activate            # Windows: .venv\Scripts\activate
+.venv\Scripts\activate              # Windows (PowerShell or Command Prompt)
+# source .venv/bin/activate         # macOS / Linux
+
 pip install -r requirements.txt
+```
 
-cp .env.example .env                 # optional: add keys (see below)
+### 2. Add the resumes
 
+Put the resume files (PDF; DOCX and TXT are also read) in a folder named
+`resumes/` in the project root:
+
+```
+AI-resumeScreening-Partner/
+  resumes/
+    candidate_01.pdf
+    candidate_02.pdf
+    ...
+```
+
+### 3. Create the API keys
+
+All three keys are free, and all three are optional. With none of them the
+pipeline still runs end to end: evidence is extracted by rules instead of a
+model, and GitHub is called without a token.
+
+| Key | Used for | Create it here | Notes |
+|---|---|---|---|
+| `GROQ_API_KEY` | Primary model that reads each eligible resume | https://console.groq.com/keys | Sign in, "Create API Key". Starts with `gsk_`. |
+| `GEMINI_API_KEY` | Fallback model, used only if Groq fails | https://aistudio.google.com/apikey | Sign in with Google, "Create API key". |
+| `GITHUB_TOKEN` | Public GitHub activity of each candidate | https://github.com/settings/tokens | "Generate new token (classic)" with **no scopes ticked**. Raises the limit from 60 to 5,000 requests/hour. |
+
+### 4. Put the keys in `.env`
+
+The keys go in a file named `.env` in the project root, next to `main.py`.
+Create it from the template:
+
+```bash
+copy .env.example .env               # Windows
+# cp .env.example .env              # macOS / Linux
+```
+
+Open `.env` in any editor and fill in the three lines. No quotes, no spaces
+around `=`:
+
+```
+GROQ_API_KEY=gsk_your_key_here
+GEMINI_API_KEY=your_key_here
+GITHUB_TOKEN=ghp_your_token_here
+```
+
+`.env` is listed in `.gitignore` and is never committed. `.env.example`
+holds only empty placeholders. Keys are read from the environment at run
+time; none is hard-coded anywhere in the code.
+
+Other settings in `.env` (all optional):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Groq model name. Change it if Groq refuses the default. |
+| `GEMINI_MODEL` | `gemini-3.1-flash-lite` | Gemini model name. |
+| `REQUIRE_PYTHON_USAGE` | `false` | `true` rejects candidates whose only Python evidence is a skills list. |
+| `ALLOW_CLASSICAL_ML` | `true` | `false` rejects candidates with classical ML/CV work only. |
+| `LLM_TOKENS_PER_MINUTE` | `7000` | Pacing budget, kept under Groq's free limit of 8,000. |
+| `LLM_CONCURRENCY`, `GITHUB_CONCURRENCY` | `1`, `5` | Parallel calls. |
+| `CACHE_DIR` | `.cache` | Where model and GitHub answers are cached. |
+
+### 5. Check the installation
+
+```bash
+python -m pytest
+```
+
+Expected: `141 passed`. The tests use no keys and no network.
+
+### 6. Run
+
+```bash
 python main.py --input ./resumes --output ./output/results.json
 ```
+
+The summary printed at the end shows which source produced the evidence:
+
+- `Evidence source {'groq': N}`: the Groq key works.
+- `{'gemini': N}`: Groq failed and the fallback took over.
+- `{'rules': N}`: no key was set, or both models failed. The reason for each
+  failure is recorded under `processing.warnings` in the output file.
+
+A first run with model keys takes roughly 15-20 minutes for 50 resumes,
+because calls are paced under the free tier's tokens-per-minute limit.
+Answers are cached in `.cache/`, so later runs take seconds.
 
 Other commands:
 
@@ -31,24 +119,16 @@ Other commands:
 python main.py --explain candidate_07.pdf        # how one candidate was graded, and why
 python main.py --input ./resumes --no-llm        # rules only, no model calls
 python main.py --input ./resumes --no-github     # skip GitHub enrichment
-python -m pytest                                 # 133 tests, no network, no keys
 ```
 
-### Environment variables
+### If a key does not work
 
-All are optional. With none set the pipeline still runs end to end.
-
-| Variable | Purpose |
+| Message in `processing.warnings` | Fix |
 |---|---|
-| `GROQ_API_KEY`, `GROQ_MODEL` | Primary model (Groq free tier). |
-| `GEMINI_API_KEY`, `GEMINI_MODEL` | Fallback model (Gemini free tier). |
-| `GITHUB_TOKEN` | Raises the GitHub limit from 60 to 5,000 requests/hour. A token with no scopes is enough. |
-| `REQUIRE_PYTHON_USAGE`, `ALLOW_CLASSICAL_ML` | Eligibility policy switches (see Design Decisions). |
-| `LLM_TOKENS_PER_MINUTE`, `LLM_CONCURRENCY`, `GITHUB_CONCURRENCY`, `CACHE_DIR` | Pacing, concurrency and cache location. |
-
-A first run with model keys takes roughly 15–20 minutes for 50 resumes,
-because calls are paced under the free tier's tokens-per-minute limit.
-Results are cached in `.cache/`, so later runs take seconds.
+| `rejected the API key (HTTP 401/403)` | The key in `.env` is wrong, expired or has a stray space. |
+| `returned HTTP 400` or `404` | The model name was refused. Set `GROQ_MODEL` or `GEMINI_MODEL` to a current name from https://console.groq.com/docs/models or https://ai.google.dev/gemini-api/docs/models. |
+| `rate limit reached (HTTP 429)` | Wait a minute, or lower `LLM_TOKENS_PER_MINUTE`. |
+| `github_token_rejected: true` in the batch summary | The GitHub token is invalid. The run continued without it. |
 
 ## Output
 
@@ -155,9 +235,14 @@ with evaluation.
   of the batch. The rule-based fallback fills the same schema, so scoring is
   identical whichever source answered, and `evidence_source` records which
   one it was.
+- The model may not contradict the hard filter or itself: if the filter saw
+  Python or AI work in use, the model cannot score it lower than the filter
+  found, and a "thin wrapper" flag is ignored when the same answer shows
+  several depth signals clearly implemented with quotes. Each such
+  adjustment is listed under `processing.warnings`.
 - Rejected resumes never reach the model, calls are paced under the free
-  tier's token limit, and answers are cached by resume text, prompt version
-  and model.
+  tier's token limit, and the model's raw answers are cached by resume
+  text, prompt version and model, so the quote check runs on every load.
 
 The rule-based fallback is weaker than a model at judging how deep a project
 really is: it works from term lists and line context, so a keyword-dense
@@ -245,7 +330,7 @@ src/screener/
   pipeline.py              batch orchestration
   report.py                results.json, summary, explain view
   api.py                   optional FastAPI interface
-tests/                     133 tests
+tests/                     141 tests
 resumes/                   input resumes
 output/results.json        generated results for the provided set
 ```

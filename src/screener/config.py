@@ -98,6 +98,9 @@ CLASSICAL_ML_AI_CAP = 10
 # Project-quality penalties (assignment: deduct 5-15 for thin LLM wrappers).
 WRAPPER_PENALTY: dict[int, int] = {0: 0, 1: 5, 2: 10, 3: 15}
 TUTORIAL_PENALTY = 5
+# A model's thin-wrapper flag is ignored when the same evidence shows this
+# many depth signals clearly implemented (severity -> signals needed).
+WRAPPER_FLAG_IGNORED_AT: dict[int, int] = {1: 2, 2: 3, 3: 3}
 MAX_TOTAL_PENALTY = 15
 TUTORIAL_MAX_AI_WORDS = 40   # AI work described in fewer words than this
 DEEP_AI_MIN_WORDS = 120      # "deep" implementation needs at least this much description

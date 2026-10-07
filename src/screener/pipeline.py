@@ -23,7 +23,7 @@ from pathlib import Path
 import httpx
 
 from . import extract
-from .analysis import Analyzer
+from .analysis import Analyzer, reconcile_with_filter
 from .cache import DiskCache
 from .config import Settings
 from .eligibility import evaluate
@@ -171,6 +171,10 @@ async def run_batch(
                 item.result.evidence = outcome.evidence
                 item.result.evidence_source = outcome.source
                 item.result.warnings.extend(outcome.warnings)
+                if outcome.source != "rules" and item.result.eligibility is not None:
+                    item.result.warnings.extend(
+                        f"{outcome.source}: {note}"
+                        for note in reconcile_with_filter(outcome.evidence, item.result.eligibility))
             except Exception as exc:   # last line of defence: rules always work
                 log.exception("analysis failed for %s", item.result.source_file)
                 item.result.evidence = build_evidence(item.lines)

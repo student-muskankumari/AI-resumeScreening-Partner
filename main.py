@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
                         format="%(levelname)s %(name)s: %(message)s")
     # httpx logs full request URLs at INFO; keep them out of normal output.
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    # pypdf logs its own parse errors; unreadable files are reported by the pipeline.
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
 
     if args.input is None:
         if not args.explain:
